@@ -1,0 +1,20 @@
+#pragma once
+
+// Hardware Configuration
+#define LED_PIN 5
+#define MATRIX_WIDTH 32
+#define MATRIX_HEIGHT 16
+#define NUM_LEDS (MATRIX_WIDTH * MATRIX_HEIGHT)  // 512 LEDs
+#define LED_TYPE WS2812B
+#define COLOR_ORDER GRB
+
+// Network Configuration
+#define WIFI_SSID "YOUR_WIFI_SSID"
+#define WIFI_PASSWORD "YOUR_WIFI_PASSWORD"
+
+// API Configuration
+#define COINGECKO_API_KEY "YOUR_COINGECKO_API_KEY"
+#define UPDATE_INTERVAL 5000   // Update every 5 seconds (12 calls/min, well within Pro API limits)
+
+// Display Configuration
+#define BRIGHTNESS 50  // LED brightness (0-255)
