@@ -90,6 +90,59 @@ BTC Price: $43,250.75 USD
 Last Updated: Dec 8, 2023 19:30:00 UTC
 ```
 
+## Text Rendering
+
+The project now includes text rendering capabilities using the FastLED_NeoMatrix library:
+
+### Text Functions with Dynamic Wrapping
+
+```cpp
+// Basic text function (no wrapping)
+void printText(x, y, text, fontSize=1, color=white);
+
+// Centered text function (no wrapping)
+void printTextCentered(centerX, centerY, text, fontSize=1, color=white);
+
+// Scrolling text function (with wrapping for animation)
+void printScrollingText(y, text, scrollOffset, fontSize=1, color=white);
+```
+
+**Wrapping Control:**
+- `printText()` and `printTextCentered()`: **No wrapping** (precise positioning)
+- `printScrollingText()`: **Wrapping enabled** (for continuous scrolling animation)
+
+**Example Usage:**
+```cpp
+// Static display - no wrapping
+printTextCentered(16, 8, "$43,250");
+
+// Animated ticker - uses wrapping for smooth scrolling
+int scrollPos = -50;  // Start off-screen
+printScrollingText(8, "BTC $43,250.75 +2.3% 24h", scrollPos);
+scrollPos++;  // Move right each frame
+```
+
+### Color Examples
+
+```cpp
+// Using matrix color helper (recommended)
+uint16_t red = matrix->Color(255, 0, 0);
+uint16_t green = matrix->Color(0, 255, 0);
+uint16_t blue = matrix->Color(0, 0, 255);
+uint16_t white = matrix->Color(255, 255, 255);
+
+// Display examples
+printText(0, 0, "BTC", red);           // Top-left corner
+printText(5, 8, "$43,250", green);    // Centered position
+```
+
+### Matrix Layout
+
+- **Size**: 32x16 pixels
+- **Origin**: Top-left (0,0)
+- **Layout**: Row-major with zigzag wiring
+- **Text wrapping**: Disabled by default
+
 ## Troubleshooting
 
 - **No WiFi connection**: Check SSID/password in `config.h`
