@@ -1,28 +1,39 @@
-# ESP32 LED Matrix BTC Ticker
+# 🚀 ESP32 LED Matrix BTC Ticker
 
-A PlatformIO project that displays Bitcoin price updates on a 32x16 LED matrix using FastLED library.
+A PlatformIO project that displays Bitcoin price updates on a 32x16 LED matrix using FastLED, NeoMatrix, and more.
 
-## Hardware Requirements
+## 🛠️ Hardware Requirements
 
 - ESP32 Development Board
 - 32x16 WS2812B LED Matrix (512 LEDs total)
 - Power supply (5V, adequate for your LED count)
 - Jumper wires
 
-## Wiring
+## 🔌 Wiring (WROOM ESP32)
 
 - LED Matrix Data Pin → ESP32 GPIO 5
-- LED Matrix 5V → External 5V Power Supply
+- LED Matrix 5V → External 5V Power Supply (optional, but recommended)
 - LED Matrix GND → ESP32 GND + Power Supply GND
 
-## Software Setup
+## 💻 Software Setup
 
-### Prerequisites
+### Tooling/Extensions
+
+#### Windsurf, VS Code
 
 1. Install [PlatformIO](https://platformio.org/install)
-2. Install [VS Code](https://code.visualstudio.com/) with PlatformIO extension (recommended)
+2. Install [VS Code](https://code.visualstudio.com/) with PlatformIO extension
+   (recommended)
 
-### Configuration
+#### Cursor
+
+1. Cursor currently is not licensed by Microsoft to use their cpptools extension. Workaround is to install an older version: 
+https://github.com/microsoft/vscode-cpptools/releases/download/v1.24.4/cpptools-macOS-arm64.vsix
+2. PlatformIO is also not listed in the Open VSX Registry (non-Microsoft Extensions Marketplace). Manually download the PlatformIO vsix extension file: 
+https://marketplace.visualstudio.com/_apis/public/gallery/publishers/platformio/vsextensions/platformio-ide/3.3.4/vspackage?targetPlatform=darwin-arm64
+3. Manually install these `.vsix` extensions (cpptools first) with Command Palette: `Extensions: Install from VSIX`
+
+### ⚙️ Configuration
 
 1. **Copy the configuration template:**
    ```bash
@@ -38,10 +49,10 @@ A PlatformIO project that displays Bitcoin price updates on a 32x16 LED matrix u
 
    **Note:** `config.h` is in `.gitignore` to keep your credentials private.
 
-### Building and Uploading
+### 🔨 Building and Uploading
 
 1. Clone/navigate to this repository
-2. Open the project in VS Code with PlatformIO, or use command line:
+2. PlatformIO should automatically detect and initialize the project. If not, PIO Home->Open the directory.
 
 #### Using VS Code + PlatformIO
 - Open the project folder in VS Code
@@ -66,94 +77,42 @@ pio run --target upload
 pio device monitor --baud 115200
 ```
 
-## How It Works
+## ⚡ How It Works
 
 1. **Startup**: ESP32 connects to WiFi and initializes the LED matrix
-2. **Status Indicators**: 
-   - Green flash: WiFi connected successfully
-   - Red flash: WiFi connection failed
-   - Blue flash: BTC price fetched successfully
-   - Orange flash: HTTP request failed
-3. **Price Updates**: Fetches BTC price from CoinDesk API every 30 seconds
-4. **Console Output**: Displays current BTC price and timestamp in serial monitor
+2. **Price Updates**: Asyncronously fetches BTC price from CoinDesk API (using timer interrupts), calculates deltas from OHLC
+3. **Drawing**: Main loop, using a variety of LED libs
 
-## Serial Monitor Output
+## 📺 Serial Monitor Output
 
-You should see output like:
+You should see output along the lines of:
 ```
 ESP32 LED Matrix BTC Ticker Starting...
 Connecting to WiFi........
 WiFi connected! IP address: 192.168.1.100
 Setup complete!
 Fetching BTC price...
-BTC Price: $43,250.75 USD
+BTC Price: $XXXXX USD
 Last Updated: Dec 8, 2023 19:30:00 UTC
-```
-
-## Text Rendering
-
-The project now includes text rendering capabilities using the FastLED_NeoMatrix library:
-
-### Text Functions with Dynamic Wrapping
-
-```cpp
-// Basic text function (no wrapping)
-void printText(x, y, text, fontSize=1, color=white);
-
-// Centered text function (no wrapping)
-void printTextCentered(centerX, centerY, text, fontSize=1, color=white);
-
-// Scrolling text function (with wrapping for animation)
-void printScrollingText(y, text, scrollOffset, fontSize=1, color=white);
-```
-
-**Wrapping Control:**
-- `printText()` and `printTextCentered()`: **No wrapping** (precise positioning)
-- `printScrollingText()`: **Wrapping enabled** (for continuous scrolling animation)
-
-**Example Usage:**
-```cpp
-// Static display - no wrapping
-printTextCentered(16, 8, "$43,250");
-
-// Animated ticker - uses wrapping for smooth scrolling
-int scrollPos = -50;  // Start off-screen
-printScrollingText(8, "BTC $43,250.75 +2.3% 24h", scrollPos);
-scrollPos++;  // Move right each frame
-```
-
-### Color Examples
-
-```cpp
-// Using matrix color helper (recommended)
-uint16_t red = matrix->Color(255, 0, 0);
-uint16_t green = matrix->Color(0, 255, 0);
-uint16_t blue = matrix->Color(0, 0, 255);
-uint16_t white = matrix->Color(255, 255, 255);
-
-// Display examples
-printText(0, 0, "BTC", red);           // Top-left corner
-printText(5, 8, "$43,250", green);    // Centered position
 ```
 
 ### Matrix Layout
 
 - **Size**: 32x16 pixels
-- **Origin**: Top-left (0,0)
-- **Layout**: Row-major with zigzag wiring
-- **Text wrapping**: Disabled by default
+- **Origin**: Bottom-right
+- **Layout**: Column-major with zigzag wiring
 
-## Troubleshooting
+## 🔧 Troubleshooting
 
 - **No WiFi connection**: Check SSID/password in `config.h`
 - **No LED response**: Verify wiring and power supply
 - **Compilation errors**: Ensure PlatformIO dependencies are installed
 - **Upload fails**: Check ESP32 is in bootloader mode and correct port is selected
 
-## Next Steps
+## 🗺️ Roadmap:
 
-This initial version logs BTC prices to the console. Future enhancements will include:
-- Display BTC price as scrolling text on the LED matrix
-- Price change indicators (color coding)
-- Historical price graphs
-- Multiple cryptocurrency support
+1. **Non-blocking async HTTP fetch** ✅
+2. OTA (Over the Air) update support
+3. Text: Restyle, add more animations + fonts
+4. Animated background effects
+5. Chart (line or bar)
