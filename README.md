@@ -85,6 +85,41 @@ pio device monitor --baud 115200
 2. **Price Updates**: Asyncronously fetches BTC price from CoinDesk API (using timer interrupts), calculates deltas from OHLC
 3. **Drawing**: Main loop, using a variety of LED libs
 
+## 📡 Over-The-Air (OTA) Updates
+
+Update firmware wirelessly without USB connection using PlatformIO environments.
+
+### 🚀 Usage
+
+#### **PlatformIO Extension (Recommended)**
+1. **First upload**: Select `esp32dev` environment → Click "Upload"
+2. **Wireless updates**: Select `esp32dev_ota` environment → Click "Upload"
+
+#### **Command Line**
+```bash
+# First upload via USB
+pio run --environment esp32dev --target upload
+
+# Wireless updates via OTA  
+pio run --environment esp32dev_ota --target upload
+
+# Monitor serial output (works with both environments)
+pio device monitor --baud 115200
+```
+
+### 🎨 Visual OTA Feedback
+The LED matrix shows OTA progress:
+- **🔵 Blue**: Update starting
+- **🟣 Purple**: Progress bar
+- **🟢 Green**: Success
+- **🔴 Red**: Failed
+
+### 🔧 Troubleshooting OTA
+- **Device not found**: Ensure device is on same network and `btc-ticker.local` is reachable
+- **mDNS issues**: Use IP directly: `pio run --environment esp32dev_ota --target upload --upload-port 192.168.1.100`
+- **Wrong environment**: Use `esp32dev_ota` for wireless updates
+- **Stuck in OTA**: Power cycle the device
+
 ## 📺 Serial Monitor Output
 
 You should see output along the lines of:
@@ -92,6 +127,9 @@ You should see output along the lines of:
 ESP32 LED Matrix BTC Ticker Starting...
 Connecting to WiFi........
 WiFi connected! IP address: 192.168.1.100
+mDNS responder started
+OTA Ready
+IP address: 192.168.1.100
 Setup complete!
 Fetching BTC price...
 BTC Price: $XXXXX USD
@@ -113,8 +151,8 @@ Last Updated: Dec 8, 2023 19:30:00 UTC
 
 ## 🗺️ Roadmap:
 
-1. **Non-blocking async HTTP fetch** ✅
-2. OTA (Over the Air) update support
+1. **Non-blocking async HTTP fetch** ✅ 
+2. **OTA (Over the Air) update support** ✅
 3. Text: Restyle, add more animations + fonts
 4. Animated background effects
 5. Chart (line or bar)

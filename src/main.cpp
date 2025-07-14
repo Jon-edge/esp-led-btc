@@ -6,6 +6,8 @@
 #include <FastLED.h>
 #include <FastLED_NeoMatrix.h>
 #include <Adafruit_GFX.h>
+#include <ArduinoOTA.h>
+#include <ESPmDNS.h>
 
 // Built-in GFX fonts - RELIABLY AVAILABLE
 #include <Fonts/TomThumb.h>  // 3x5 pixel font - numbers + letters (compact)
@@ -65,6 +67,7 @@ struct ScrollState {
 
 // Forward declarations
 void connectToWiFi();
+void setupOTA();
 void fetchBTCPriceTask(void *pvParameters);
 void fetchOHLCDataTask(void *pvParameters);
 
@@ -136,6 +139,11 @@ void setup() {
     // Connect to WiFi
     connectToWiFi();
     
+    // Setup OTA after WiFi connection
+    if (WiFi.status() == WL_CONNECTED) {
+        setupOTA();
+    }
+    
     // Create tasks for non-blocking HTTP requests
     if (WiFi.status() == WL_CONNECTED) {
         Serial.println("Creating HTTP request tasks...");
@@ -169,6 +177,9 @@ void setup() {
 }
 
 void loop() {
+    // Handle OTA updates
+    ArduinoOTA.handle();
+    
     // Don't clear entire screen - causes flicker
     
     // Check WiFi connection
@@ -263,6 +274,64 @@ void connectToWiFi() {
         fill_solid(leds, NUM_LEDS, CRGB::Black);
         FastLED.show();
     }
+}
+
+void setupOTA() {
+    // Set hostname for mDNS
+    if (!MDNS.begin("btc-ticker")) {
+        Serial.println("Error setting up mDNS responder!");
+        return;
+    }
+    Serial.println("mDNS responder started");
+    
+    // Configure OTA
+    ArduinoOTA.setHostname("btc-ticker");
+    
+    // OTA event handlers with LED feedback
+    ArduinoOTA.onStart([]() {
+        String type = (ArduinoOTA.getCommand() == U_FLASH) ? "sketch" : "filesystem";
+        Serial.println("Start updating " + type);
+        
+        // Show blue for OTA start
+        fill_solid(leds, NUM_LEDS, CRGB::Blue);
+        FastLED.show();
+    });
+    
+    ArduinoOTA.onEnd([]() {
+        Serial.println("\nEnd");
+        // Show green for successful OTA
+        fill_solid(leds, NUM_LEDS, CRGB::Green);
+        FastLED.show();
+        delay(1000);
+    });
+    
+    ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+        Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
+        
+        // Show progress with purple LEDs
+        int progressLeds = (progress * NUM_LEDS) / total;
+        fill_solid(leds, NUM_LEDS, CRGB::Black);
+        fill_solid(leds, progressLeds, CRGB::Purple);
+        FastLED.show();
+    });
+    
+    ArduinoOTA.onError([](ota_error_t error) {
+        Serial.printf("Error[%u]: ", error);
+        if (error == OTA_AUTH_ERROR) Serial.println("Auth Failed");
+        else if (error == OTA_BEGIN_ERROR) Serial.println("Begin Failed");
+        else if (error == OTA_CONNECT_ERROR) Serial.println("Connect Failed");
+        else if (error == OTA_RECEIVE_ERROR) Serial.println("Receive Failed");
+        else if (error == OTA_END_ERROR) Serial.println("End Failed");
+        
+        // Show red for OTA error
+        fill_solid(leds, NUM_LEDS, CRGB::Red);
+        FastLED.show();
+    });
+    
+    ArduinoOTA.begin();
+    Serial.println("OTA Ready");
+    Serial.print("IP address: ");
+    Serial.println(WiFi.localIP());
 }
 
 // Task function for fetching BTC price (runs on separate core)
