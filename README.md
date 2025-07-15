@@ -1,3 +1,5 @@
+![17525658914877111233651158453782](https://github.com/user-attachments/assets/28ccfa2e-b5a5-462f-87b6-405e0d685bde)
+
 # 🚀 ESP32 LED Matrix BTC Ticker
 
 A PlatformIO project that displays Bitcoin price updates on a 32x16 LED matrix using FastLED, NeoMatrix, and more.
