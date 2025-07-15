@@ -122,6 +122,8 @@ The LED matrix shows OTA progress:
 
 ## 📺 Serial Monitor Output
 
+### USB
+
 You should see output along the lines of:
 ```
 ESP32 LED Matrix BTC Ticker Starting...
@@ -135,6 +137,10 @@ Fetching BTC price...
 BTC Price: $XXXXX USD
 Last Updated: Dec 8, 2023 19:30:00 UTC
 ```
+
+### Remote
+
+Serial monitor for a remotely deployed device can be accessed at: http://btc-ticker.local
 
 ### Matrix Layout
 

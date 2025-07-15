@@ -8,6 +8,7 @@
 #include <Adafruit_GFX.h>
 #include <ArduinoOTA.h>
 #include <ESPmDNS.h>
+#include <WebServer.h>
 
 // Built-in GFX fonts - RELIABLY AVAILABLE
 #include <Fonts/TomThumb.h>  // 3x5 pixel font - numbers + letters (compact)
@@ -68,6 +69,8 @@ struct ScrollState {
 // Forward declarations
 void connectToWiFi();
 void setupOTA();
+void setupWebServer();
+void addToConsoleBuffer(const String& message);
 void fetchBTCPriceTask(void *pvParameters);
 void fetchOHLCDataTask(void *pvParameters);
 
@@ -117,6 +120,11 @@ TaskHandle_t ohlcTaskHandle = NULL;
 // Mutex for thread-safe access to shared variables
 SemaphoreHandle_t priceMutex;
 
+// Web server for console monitoring
+WebServer server(80);
+String consoleBuffer = "";
+const int MAX_CONSOLE_BUFFER = 8192;  // 8KB buffer for console output
+
 void setup() {
     Serial.begin(115200);
     Serial.println("ESP32 LED Matrix BTC Ticker Starting...");
@@ -142,11 +150,13 @@ void setup() {
     // Setup OTA after WiFi connection
     if (WiFi.status() == WL_CONNECTED) {
         setupOTA();
+        setupWebServer();
     }
     
     // Create tasks for non-blocking HTTP requests
     if (WiFi.status() == WL_CONNECTED) {
         Serial.println("Creating HTTP request tasks...");
+        addToConsoleBuffer("Creating HTTP request tasks...");
         
         // Create price fetching task on Core 0
         xTaskCreatePinnedToCore(
@@ -171,14 +181,19 @@ void setup() {
         );
         
         Serial.println("HTTP tasks created successfully!");
+        addToConsoleBuffer("HTTP tasks created successfully!");
     }
     
     Serial.println("Setup complete!");
+    addToConsoleBuffer("Setup complete!");
 }
 
 void loop() {
     // Handle OTA updates
     ArduinoOTA.handle();
+    
+    // Handle web server requests
+    server.handleClient();
     
     // Don't clear entire screen - causes flicker
     
@@ -234,6 +249,17 @@ void loop() {
 
 void connectToWiFi() {
     Serial.print("Connecting to WiFi");
+    Serial.print(" SSID: ");
+    Serial.println(WIFI_SSID);
+    
+    // Scan for networks first
+    Serial.println("Scanning for networks...");
+    int n = WiFi.scanNetworks();
+    Serial.printf("Found %d networks:\n", n);
+    for (int i = 0; i < n; i++) {
+        Serial.printf("  %d: %s (%ddBm) %s\n", i, WiFi.SSID(i).c_str(), WiFi.RSSI(i), WiFi.encryptionType(i) == WIFI_AUTH_OPEN ? "OPEN" : "ENCRYPTED");
+    }
+    
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
     
     // Reset scroll state for "Connecting..." animation
@@ -249,6 +275,21 @@ void connectToWiFi() {
         delay(100);
         Serial.print(".");
         attempts++;
+        
+        // Print status every 10 attempts
+        if (attempts % 10 == 0) {
+            Serial.printf("\nWiFi Status: %d (", WiFi.status());
+            switch(WiFi.status()) {
+                case WL_NO_SSID_AVAIL: Serial.print("NO_SSID_AVAIL"); break;
+                case WL_SCAN_COMPLETED: Serial.print("SCAN_COMPLETED"); break;
+                case WL_CONNECTED: Serial.print("CONNECTED"); break;
+                case WL_CONNECT_FAILED: Serial.print("CONNECT_FAILED"); break;
+                case WL_CONNECTION_LOST: Serial.print("CONNECTION_LOST"); break;
+                case WL_DISCONNECTED: Serial.print("DISCONNECTED"); break;
+                default: Serial.print("UNKNOWN"); break;
+            }
+            Serial.println(")");
+        }
     }
     
     if (WiFi.status() == WL_CONNECTED) {
@@ -256,6 +297,7 @@ void connectToWiFi() {
         Serial.println();
         Serial.print("WiFi connected! IP address: ");
         Serial.println(WiFi.localIP());
+        addToConsoleBuffer("WiFi connected! IP address: " + WiFi.localIP().toString());
         
         // Flash green to indicate WiFi connection
         fill_solid(leds, NUM_LEDS, CRGB::Green);
@@ -266,6 +308,7 @@ void connectToWiFi() {
     } else {
         Serial.println();
         Serial.println("Failed to connect to WiFi");
+        addToConsoleBuffer("Failed to connect to WiFi");
         
         // Flash red to indicate WiFi failure
         fill_solid(leds, NUM_LEDS, CRGB::Red);
@@ -334,6 +377,49 @@ void setupOTA() {
     Serial.println(WiFi.localIP());
 }
 
+void addToConsoleBuffer(const String& message) {
+    // Add timestamp
+    String timestampedMessage = "[" + String(millis()) + "] " + message + "\n";
+    consoleBuffer += timestampedMessage;
+    
+    // Keep buffer size manageable
+    if (consoleBuffer.length() > MAX_CONSOLE_BUFFER) {
+        consoleBuffer = consoleBuffer.substring(consoleBuffer.length() - MAX_CONSOLE_BUFFER);
+    }
+}
+
+void setupWebServer() {
+    // Console monitoring page
+    server.on("/", []() {
+        String html = "<!DOCTYPE html><html><head><title>ESP32 BTC Ticker Console</title>";
+        html += "<meta http-equiv='refresh' content='2'>";
+        html += "<style>body{font-family:monospace;background:#000;color:#0f0;padding:20px;} ";
+        html += "pre{white-space:pre-wrap;word-wrap:break-word;}</style></head>";
+        html += "<body><h1>ESP32 BTC Ticker Console</h1>";
+        html += "<p>Auto-refresh every 2 seconds | <a href='/clear'>Clear Buffer</a></p>";
+        html += "<pre>" + consoleBuffer + "</pre>";
+        html += "</body></html>";
+        server.send(200, "text/html", html);
+    });
+    
+    // API endpoint for just the console data
+    server.on("/console", []() {
+        server.send(200, "text/plain", consoleBuffer);
+    });
+    
+    // Clear console buffer
+    server.on("/clear", []() {
+        consoleBuffer = "";
+        addToConsoleBuffer("Console buffer cleared");
+        server.sendHeader("Location", "/");
+        server.send(302, "text/plain", "");
+    });
+    
+    server.begin();
+    Serial.println("Web server started on http://btc-ticker.local");
+    addToConsoleBuffer("Web server started on http://btc-ticker.local");
+}
+
 // Task function for fetching BTC price (runs on separate core)
 void fetchBTCPriceTask(void *pvParameters) {
     HTTPClient http;
@@ -366,6 +452,7 @@ void fetchBTCPriceTask(void *pvParameters) {
                             btc24hChange = round(btc24hChange * 100.0) / 100.0;
                             
                             Serial.printf("[TASK] BTC price: $%.2f USD, 24h: %+.2f%%\n", currentBTCPrice, btc24hChange);
+                            addToConsoleBuffer("BTC price: $" + String(currentBTCPrice, 2) + " USD, 24h: " + String(btc24hChange, 2) + "%");
                             xSemaphoreGive(priceMutex);
                         }
                     }
@@ -412,8 +499,9 @@ void fetchOHLCDataTask(void *pvParameters) {
                             
                             if (xSemaphoreTake(priceMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
                                 btc1hChange = ((currentBTCPrice - price1hClose) / price1hClose) * 100.0;
-                                Serial.printf("[TASK] 1h change: %+.2f%%\n", btc1hChange);
-                                xSemaphoreGive(priceMutex);
+                                                            Serial.printf("[TASK] 1h change: %+.2f%%\n", btc1hChange);
+                            addToConsoleBuffer("1h change: " + String(btc1hChange, 2) + "%");
+                            xSemaphoreGive(priceMutex);
                             }
                         }
                     }
@@ -441,6 +529,7 @@ void fetchOHLCDataTask(void *pvParameters) {
                         if (xSemaphoreTake(priceMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
                             btc1dChange = ((currentBTCPrice - dailyOpen) / dailyOpen) * 100.0;
                             Serial.printf("[TASK] 1d change: %+.2f%%\n", btc1dChange);
+                            addToConsoleBuffer("1d change: " + String(btc1dChange, 2) + "%");
                             xSemaphoreGive(priceMutex);
                         }
                     }
