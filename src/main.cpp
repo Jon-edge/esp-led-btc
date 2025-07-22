@@ -26,6 +26,19 @@
 
 #include "config.h"
 
+// WiFi Configuration defaults (can be overridden in config.h)
+#ifndef WIFI_CONNECT_TIMEOUT
+#define WIFI_CONNECT_TIMEOUT 15000   // 15 seconds per connection attempt
+#endif
+
+#ifndef WIFI_MAX_ATTEMPTS  
+#define WIFI_MAX_ATTEMPTS 3          // 3 connection attempts
+#endif
+
+#ifndef WIFI_RECONNECT_INTERVAL
+#define WIFI_RECONNECT_INTERVAL 10000 // 10 second base reconnect interval
+#endif
+
 #define BTC_API_URL "https://pro-api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd&include_24hr_change=true"
 
 // Font selection enum for easy switching
@@ -110,11 +123,10 @@ const unsigned long REQUEST_TIMEOUT = 10000;  // 10 seconds timeout for requests
 
 // WiFi status management
 unsigned long lastReconnectAttempt = 0;
-const unsigned long RECONNECT_INTERVAL = 10000;  // 10 seconds between reconnect attempts
 
 // Scroll state instances for different text lines
-ScrollState connectingScroll(0, 100);  // "Connecting..." - 100ms speed
-ScrollState offlineScroll(0, 150);     // "Offline" - 150ms speed (slower)
+ScrollState connectingScroll(0, 100);  // "Connecting..." - starts visible left, 100ms speed
+ScrollState offlineScroll(32, 150);    // "Offline" - starts from right, 150ms speed (slower)
 ScrollState changeScroll(0, 120);      // "24H: x.x%" - 120ms speed
 
 // FastLED_NeoMatrix setup for 32x16 matrix
@@ -147,6 +159,12 @@ void setup() {
     // Clear all LEDs
     fill_solid(leds, NUM_LEDS, CRGB::Black);
     FastLED.show();
+    
+    // Show "GM" during initialization
+    uint16_t white = matrix->Color(255, 255, 255);
+    printTextCentered(32, 8, "GM", FONT_BUILTIN, white);
+    matrix->show();
+    delay(1000);  // Show for 1 second
     
     // Create mutex for thread-safe access
     priceMutex = xSemaphoreCreateMutex();
@@ -204,19 +222,50 @@ void loop() {
     
     // Don't clear entire screen - causes flicker
     
-    // Check WiFi connection
+    // Check WiFi connection with enhanced monitoring
     if (WiFi.status() != WL_CONNECTED) {
-        wifiConnected = false;
+        if (wifiConnected) {
+            // Just lost connection - log the event
+            Serial.printf("WiFi connection lost! Previous RSSI: %ddBm\n", WiFi.RSSI());
+            addToConsoleBuffer("WiFi connection lost - attempting reconnect");
+            wifiConnected = false;
+        }
         
         // Show scrolling "Offline" text
         uint16_t red = matrix->Color(255, 0, 0);
-        updateScrollingText(8, "Offline", offlineScroll, -50, FONT_BUILTIN, red);
+        updateScrollingText(8, "Offline", offlineScroll, 32, FONT_BUILTIN, red);
         
-        // Periodic reconnection attempts
-        if (millis() - lastReconnectAttempt > RECONNECT_INTERVAL) {
-            Serial.println("WiFi offline, attempting to reconnect...");
+        // Smarter reconnection with escalating intervals
+        unsigned long timeSinceLastAttempt = millis() - lastReconnectAttempt;
+        unsigned long reconnectInterval = WIFI_RECONNECT_INTERVAL;
+        
+        // Escalate reconnect attempts: 10s, 30s, 60s, then back to 10s
+        static int reconnectAttempts = 0;
+        if (reconnectAttempts >= 3) {
+            reconnectInterval = 60000;  // 1 minute
+        } else if (reconnectAttempts >= 1) {
+            reconnectInterval = 30000;  // 30 seconds
+        }
+        
+        if (timeSinceLastAttempt > reconnectInterval) {
+            reconnectAttempts++;
+            Serial.printf("WiFi offline for %lu seconds, reconnect attempt #%d\n", 
+                         timeSinceLastAttempt / 1000, reconnectAttempts);
+            
+            // Reset offline scroll for next display cycle
+            offlineScroll.reset(32);
+            
+            // Check if we can see our network before attempting connection
+            WiFi.scanNetworks(true);  // Async scan
+            delay(100);  // Brief delay for scan to start
+            
             connectToWiFi();
             lastReconnectAttempt = millis();
+            
+            // Reset attempt counter on successful connection
+            if (WiFi.status() == WL_CONNECTED) {
+                reconnectAttempts = 0;
+            }
         }
         
         delay(50);  // Small delay to prevent excessive CPU usage
@@ -230,9 +279,10 @@ void loop() {
         fill_solid(leds, NUM_LEDS, CRGB::Black);
         uint16_t green = matrix->Color(0, 255, 0);
         printTextCentered(32, 8, "Connected", FONT_TOMTHUMB, green);
+        matrix->show();
         delay(1000);  // Show success message briefly
         fill_solid(leds, NUM_LEDS, CRGB::Black);
-        FastLED.show();
+        matrix->show();
     }
     
     // Display BTC ticker if we have price data
@@ -255,75 +305,173 @@ void loop() {
 }
 
 void connectToWiFi() {
-    Serial.print("Connecting to WiFi");
-    Serial.print(" SSID: ");
+    Serial.print("Connecting to WiFi SSID: ");
     Serial.println(WIFI_SSID);
     
-    // Scan for networks first
+    // Disconnect and clear any existing connection state
+    WiFi.disconnect(true);
+    WiFi.mode(WIFI_OFF);
+    delay(100);
+    WiFi.mode(WIFI_STA);
+    delay(500);
+    
+    // Scan for networks and find the strongest matching SSID
     Serial.println("Scanning for networks...");
-    int n = WiFi.scanNetworks();
-    Serial.printf("Found %d networks:\n", n);
-    for (int i = 0; i < n; i++) {
-        Serial.printf("  %d: %s (%ddBm) %s\n", i, WiFi.SSID(i).c_str(), WiFi.RSSI(i), WiFi.encryptionType(i) == WIFI_AUTH_OPEN ? "OPEN" : "ENCRYPTED");
+    int numNetworks = WiFi.scanNetworks();
+    Serial.printf("Found %d networks:\n", numNetworks);
+    
+    int bestRSSI = -1000;
+    int bestChannel = 0;
+    String targetSSID = String(WIFI_SSID);
+    bool targetFound = false;
+    
+    for (int i = 0; i < numNetworks; i++) {
+        String ssid = WiFi.SSID(i);
+        int rssi = WiFi.RSSI(i);
+        String security = (WiFi.encryptionType(i) == WIFI_AUTH_OPEN) ? "OPEN" : "ENCRYPTED";
+        
+        Serial.printf("  %d: %s (%ddBm) %s", i, ssid.c_str(), rssi, security.c_str());
+        
+        // Check if this is our target SSID and if it's stronger than previous matches
+        if (ssid == targetSSID) {
+            targetFound = true;
+            if (rssi > bestRSSI) {
+                bestRSSI = rssi;
+                bestChannel = WiFi.channel(i);
+                Serial.print(" <- BEST MATCH");
+            } else {
+                Serial.print(" <- MATCH");
+            }
+        }
+        Serial.println();
     }
     
-    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+    if (!targetFound) {
+        Serial.printf("ERROR: Target SSID '%s' not found in scan!\n", WIFI_SSID);
+        addToConsoleBuffer("ERROR: Target SSID not found in scan");
+        return;
+    }
     
-    // Reset scroll state for "Connecting..." animation
-    connectingScroll.reset(32);
+    Serial.printf("Connecting to strongest '%s' signal: %ddBm (channel %d)\n", 
+                  WIFI_SSID, bestRSSI, bestChannel);
+    addToConsoleBuffer("Connecting to strongest signal: " + String(bestRSSI) + "dBm");
     
-    int attempts = 0;
-    while (WiFi.status() != WL_CONNECTED && attempts < 30) {
-        // Update scrolling "Connecting..." text
-        matrix->fillScreen(0);
-        uint16_t yellow = matrix->Color(255, 255, 0);
-        updateScrollingText(5, "Connecting...", connectingScroll, 0, FONT_BUILTIN, yellow);
+    // Reset scroll state for "Connecting..." animation (start from left visible)
+    connectingScroll.reset(0);  // Start from left edge, visible immediately
+    
+    // Multiple connection attempts with different strategies
+    for (int attempt = 1; attempt <= WIFI_MAX_ATTEMPTS; attempt++) {
+        Serial.printf("\n=== Connection Attempt %d/%d ===\n", attempt, WIFI_MAX_ATTEMPTS);
         
-        delay(100);
-        Serial.print(".");
-        attempts++;
+        // Reset connecting animation to start from left for each attempt
+        connectingScroll.reset(0);
         
-        // Print status every 10 attempts
-        if (attempts % 10 == 0) {
-            Serial.printf("\nWiFi Status: %d (", WiFi.status());
-            switch(WiFi.status()) {
-                case WL_NO_SSID_AVAIL: Serial.print("NO_SSID_AVAIL"); break;
-                case WL_SCAN_COMPLETED: Serial.print("SCAN_COMPLETED"); break;
-                case WL_CONNECTED: Serial.print("CONNECTED"); break;
-                case WL_CONNECT_FAILED: Serial.print("CONNECT_FAILED"); break;
-                case WL_CONNECTION_LOST: Serial.print("CONNECTION_LOST"); break;
-                case WL_DISCONNECTED: Serial.print("DISCONNECTED"); break;
-                default: Serial.print("UNKNOWN"); break;
+        // Clean slate for each attempt
+        WiFi.disconnect(true);
+        delay(500);
+        
+        // Configure WiFi with optimal settings
+        WiFi.config(INADDR_NONE, INADDR_NONE, INADDR_NONE);  // Clear static IP
+        WiFi.setAutoReconnect(true);
+        WiFi.setHostname(DEVICE_HOSTNAME);
+        
+        // Start connection
+        wl_status_t connectResult = WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+        Serial.printf("WiFi.begin() returned: %d\n", connectResult);
+        
+        // Wait for connection with detailed status monitoring
+        unsigned long connectStart = millis();
+        unsigned long lastStatusCheck = 0;
+        int statusChecks = 0;
+        
+        while (WiFi.status() != WL_CONNECTED && (millis() - connectStart) < WIFI_CONNECT_TIMEOUT) {
+            // Update connecting animation
+            matrix->fillScreen(0);
+            uint16_t yellow = matrix->Color(255, 255, 0);
+            char connectMsg[32];
+            sprintf(connectMsg, "Connecting %d/%d...", attempt, WIFI_MAX_ATTEMPTS);
+            updateScrollingText(5, connectMsg, connectingScroll, 32, FONT_BUILTIN, yellow);
+            
+            delay(200);
+            Serial.print(".");
+            statusChecks++;
+            
+            // Detailed status every 2 seconds
+            if (millis() - lastStatusCheck > 2000) {
+                wl_status_t status = WiFi.status();
+                Serial.printf("\nStatus check %d: %d (", statusChecks, status);
+                
+                switch(status) {
+                    case WL_IDLE_STATUS: Serial.print("IDLE"); break;
+                    case WL_NO_SSID_AVAIL: Serial.print("NO_SSID_AVAIL"); break;
+                    case WL_SCAN_COMPLETED: Serial.print("SCAN_COMPLETED"); break;
+                    case WL_CONNECTED: Serial.print("CONNECTED"); break;
+                    case WL_CONNECT_FAILED: Serial.print("CONNECT_FAILED"); break;
+                    case WL_CONNECTION_LOST: Serial.print("CONNECTION_LOST"); break;
+                    case WL_DISCONNECTED: Serial.print("DISCONNECTED"); break;
+                    default: Serial.print("UNKNOWN"); break;
+                }
+                Serial.printf(") RSSI: %ddBm\n", WiFi.RSSI());
+                lastStatusCheck = millis();
+                
+                // Break early on certain failures
+                if (status == WL_CONNECT_FAILED || status == WL_NO_SSID_AVAIL) {
+                    Serial.println("Connection failed - trying next attempt");
+                    break;
+                }
             }
-            Serial.println(")");
+        }
+        
+        // Check final result
+        if (WiFi.status() == WL_CONNECTED) {
+            wifiConnected = true;
+            Serial.printf("\n✓ WiFi connected successfully on attempt %d!\n", attempt);
+            Serial.printf("IP address: %s\n", WiFi.localIP().toString().c_str());
+            Serial.printf("Signal strength: %ddBm\n", WiFi.RSSI());
+            Serial.printf("Channel: %d\n", WiFi.channel());
+            
+            addToConsoleBuffer("WiFi connected! IP: " + WiFi.localIP().toString() + 
+                              " RSSI: " + String(WiFi.RSSI()) + "dBm");
+            
+            // Flash green to indicate WiFi connection
+            fill_solid(leds, NUM_LEDS, CRGB::Green);
+            FastLED.show();
+            delay(500);
+            fill_solid(leds, NUM_LEDS, CRGB::Black);
+            FastLED.show();
+            return;
+        } else {
+            wl_status_t finalStatus = WiFi.status();
+            Serial.printf("\n✗ Attempt %d failed. Final status: %d\n", attempt, finalStatus);
+            
+            // Handle specific error cases
+            if (finalStatus == WL_CONNECT_FAILED) {
+                Serial.println("Authentication likely failed - check password");
+                addToConsoleBuffer("Auth failed - check password (attempt " + String(attempt) + ")");
+            } else if (finalStatus == WL_NO_SSID_AVAIL) {
+                Serial.println("SSID not available - signal may be too weak");
+                addToConsoleBuffer("SSID unavailable (attempt " + String(attempt) + ")");
+            }
+            
+            // Wait before next attempt (exponential backoff)
+            if (attempt < WIFI_MAX_ATTEMPTS) {
+                int waitTime = attempt * 2;  // 2, 4, 6 seconds
+                Serial.printf("Waiting %d seconds before next attempt...\n", waitTime);
+                delay(waitTime * 1000);
+            }
         }
     }
     
-    if (WiFi.status() == WL_CONNECTED) {
-        wifiConnected = true;
-        Serial.println();
-        Serial.print("WiFi connected! IP address: ");
-        Serial.println(WiFi.localIP());
-        addToConsoleBuffer("WiFi connected! IP address: " + WiFi.localIP().toString());
-        
-        // Flash green to indicate WiFi connection
-        fill_solid(leds, NUM_LEDS, CRGB::Green);
-        FastLED.show();
-        delay(500);
-        fill_solid(leds, NUM_LEDS, CRGB::Black);
-        FastLED.show();
-    } else {
-        Serial.println();
-        Serial.println("Failed to connect to WiFi");
-        addToConsoleBuffer("Failed to connect to WiFi");
-        
-        // Flash red to indicate WiFi failure
-        fill_solid(leds, NUM_LEDS, CRGB::Red);
-        FastLED.show();
-        delay(500);
-        fill_solid(leds, NUM_LEDS, CRGB::Black);
-        FastLED.show();
-    }
+    // All attempts failed
+    Serial.println("\n✗ All connection attempts failed!");
+    addToConsoleBuffer("All WiFi connection attempts failed");
+    
+    // Flash red to indicate WiFi failure
+    fill_solid(leds, NUM_LEDS, CRGB::Red);
+    FastLED.show();
+    delay(1000);
+    fill_solid(leds, NUM_LEDS, CRGB::Black);
+    FastLED.show();
 }
 
 void setupOTA() {

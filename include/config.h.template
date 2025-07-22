@@ -11,6 +11,10 @@
 // Network Configuration
 #define WIFI_SSID "YOUR_WIFI_SSID"
 #define WIFI_PASSWORD "YOUR_WIFI_PASSWORD"
+// WiFi Connection Settings (optional - defaults work for most cases)
+#define WIFI_CONNECT_TIMEOUT 15000   // Timeout per connection attempt (ms)
+#define WIFI_MAX_ATTEMPTS 3          // Number of connection attempts
+#define WIFI_RECONNECT_INTERVAL 10000 // Base reconnect interval (ms)
 
 // Note: DEVICE_HOSTNAME is now configured in platformio.ini
 // Edit the "hostname" value in the [platformio] section to customize
