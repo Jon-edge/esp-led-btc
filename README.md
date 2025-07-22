@@ -49,6 +49,13 @@ https://marketplace.visualstudio.com/_apis/public/gallery/publishers/platformio/
    #define COINGECKO_API_KEY "YOUR_COINGECKO_API_KEY"
    ```
 
+3. **[Optional] Customize hostname** by editing `platformio.ini`:
+   ```ini
+   [platformio]
+   hostname = my-custom-name
+   ```
+   This automatically configures both the device hostname and OTA upload target.
+
    **Note:** `config.h` is in `.gitignore` to keep your credentials private.
 
 ### 🔨 Building and Uploading
@@ -100,7 +107,7 @@ Update firmware wirelessly without USB connection using PlatformIO environments.
 # First upload via USB
 pio run --environment esp32dev --target upload
 
-# Wireless updates via OTA  
+# Wireless updates via OTA (uses hostname from platformio.ini)
 pio run --environment esp32dev_ota --target upload
 
 # Monitor serial output (works with both environments)
@@ -115,7 +122,8 @@ The LED matrix shows OTA progress:
 - **🔴 Red**: Failed
 
 ### 🔧 Troubleshooting OTA
-- **Device not found**: Ensure device is on same network and `btc-ticker.local` is reachable
+- **Device not found**: Ensure device is on same network and `<hostname>.local` is reachable (check `platformio.ini` for configured hostname)
+- **Custom hostname not working**: Verify hostname is correctly set in `platformio.ini` under `[platformio]` section
 - **mDNS issues**: Use IP directly: `pio run --environment esp32dev_ota --target upload --upload-port 192.168.1.100`
 - **Wrong environment**: Use `esp32dev_ota` for wireless updates
 - **Stuck in OTA**: Power cycle the device
@@ -140,7 +148,7 @@ Last Updated: Dec 8, 2023 19:30:00 UTC
 
 ### Remote
 
-Serial monitor for a remotely deployed device can be accessed at: http://btc-ticker.local
+Serial monitor for a remotely deployed device can be accessed at: `http://<hostname>.local` (hostname configured in `platformio.ini`, default: http://btc-ticker.local)
 
 ### Matrix Layout
 

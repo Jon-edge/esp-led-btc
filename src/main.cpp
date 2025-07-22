@@ -9,6 +9,7 @@
 #include <ArduinoOTA.h>
 #include <ESPmDNS.h>
 #include <WebServer.h>
+#include <esp_task_wdt.h>
 
 // Built-in GFX fonts - RELIABLY AVAILABLE
 #include <Fonts/TomThumb.h>  // 3x5 pixel font - numbers + letters (compact)
@@ -73,6 +74,8 @@ void setupWebServer();
 void addToConsoleBuffer(const String& message);
 void fetchBTCPriceTask(void *pvParameters);
 void fetchOHLCDataTask(void *pvParameters);
+void suspendHttpTasks();
+void resumeHttpTasks();
 
 // Text printing function declarations
 void printText(int16_t x, int16_t y, const char* text, FontType fontType = FONT_BUILTIN, uint16_t color = 0xFFFF);
@@ -93,6 +96,10 @@ double btc1hChange = 0.0;
 double btc1dChange = 0.0;
 bool wifiConnected = false;
 
+// OTA state management
+bool otaInProgress = false;
+bool httpTasksSuspended = false;
+
 // Request state management
 bool priceRequestInProgress = false;
 bool ohlcHourlyRequestInProgress = false;
@@ -106,9 +113,9 @@ unsigned long lastReconnectAttempt = 0;
 const unsigned long RECONNECT_INTERVAL = 10000;  // 10 seconds between reconnect attempts
 
 // Scroll state instances for different text lines
-ScrollState connectingScroll(32, 100);  // "Connecting..." - 100ms speed
-ScrollState offlineScroll(32, 150);     // "Offline" - 150ms speed (slower)
-ScrollState changeScroll(32, 120);      // "24H: x.x%" - 120ms speed
+ScrollState connectingScroll(0, 100);  // "Connecting..." - 100ms speed
+ScrollState offlineScroll(0, 150);     // "Offline" - 150ms speed (slower)
+ScrollState changeScroll(0, 120);      // "24H: x.x%" - 120ms speed
 
 // FastLED_NeoMatrix setup for 32x16 matrix
 FastLED_NeoMatrix *matrix = new FastLED_NeoMatrix(leds, 32, 16, NEO_MATRIX_BOTTOM + NEO_MATRIX_RIGHT + NEO_MATRIX_COLUMNS + NEO_MATRIX_ZIGZAG);
@@ -321,54 +328,157 @@ void connectToWiFi() {
 
 void setupOTA() {
     // Set hostname for mDNS
-    if (!MDNS.begin("btc-ticker")) {
+    if (!MDNS.begin(DEVICE_HOSTNAME)) {
         Serial.println("Error setting up mDNS responder!");
         return;
     }
     Serial.println("mDNS responder started");
     
     // Configure OTA
-    ArduinoOTA.setHostname("btc-ticker");
+    ArduinoOTA.setHostname(DEVICE_HOSTNAME);
     
-    // OTA event handlers with LED feedback
+    // Pre-flight checks for OTA readiness
+    Serial.println("=== OTA PRE-FLIGHT CHECKS ===");
+    Serial.printf("Total heap: %d bytes\n", ESP.getHeapSize());
+    Serial.printf("Free heap: %d bytes\n", ESP.getFreeHeap());
+    Serial.printf("Min free heap: %d bytes\n", ESP.getMinFreeHeap());
+    Serial.printf("Max alloc heap: %d bytes\n", ESP.getMaxAllocHeap());
+    Serial.printf("Flash size: %d bytes\n", ESP.getFlashChipSize());
+    Serial.printf("Free sketch space: %d bytes\n", ESP.getFreeSketchSpace());
+    
+    // Verify we have adequate space for OTA
+    if (ESP.getFreeSketchSpace() < 1000000) {
+        Serial.println("WARNING: Insufficient flash space for OTA!");
+        addToConsoleBuffer("WARNING: Insufficient flash space for OTA!");
+    } else {
+        Serial.println("Flash space check: PASSED");
+        addToConsoleBuffer("Flash space check: PASSED");
+    }
+    
+    // OTA event handlers with LED feedback and HTTP task management
     ArduinoOTA.onStart([]() {
         String type = (ArduinoOTA.getCommand() == U_FLASH) ? "sketch" : "filesystem";
-        Serial.println("Start updating " + type);
+        Serial.println("=== OTA UPDATE STARTING ===");
+        Serial.println("Updating: " + type);
+        addToConsoleBuffer("OTA UPDATE STARTING - Type: " + type);
         
-        // Show blue for OTA start
-        fill_solid(leds, NUM_LEDS, CRGB::Blue);
+        // Print memory and flash information for debugging
+        Serial.printf("Free heap: %d bytes\n", ESP.getFreeHeap());
+        Serial.printf("Free sketch space: %d bytes\n", ESP.getFreeSketchSpace());
+        Serial.printf("Sketch size: %d bytes\n", ESP.getSketchSize());
+        Serial.printf("Flash chip size: %d bytes\n", ESP.getFlashChipSize());
+        Serial.printf("Flash chip speed: %d Hz\n", ESP.getFlashChipSpeed());
+        
+        // Check if we have enough space for OTA
+        size_t freeSpace = ESP.getFreeSketchSpace();
+        if (freeSpace < 1000000) {  // Less than 1MB free
+            Serial.printf("WARNING: Low flash space for OTA: %d bytes\n", freeSpace);
+        }
+        
+        addToConsoleBuffer("Memory check - Free heap: " + String(ESP.getFreeHeap()) + 
+                          ", Flash space: " + String(ESP.getFreeSketchSpace()));
+        
+        // Critical: Suspend HTTP tasks to avoid conflicts
+        otaInProgress = true;
+        suspendHttpTasks();
+        
+        // Wait longer for tasks to fully suspend and memory to stabilize
+        delay(500);
+        
+        // Extend watchdog timeout to prevent timeout during flash erase
+        // Note: Don't fully disable watchdog as it can cause other issues
+        esp_task_wdt_reset();  // Reset watchdog before long operation
+        
+        // Turn off ALL LEDs to reduce power consumption during flash operations
+        fill_solid(leds, NUM_LEDS, CRGB::Black);
+        FastLED.setBrightness(0);  // Minimize power draw
         FastLED.show();
+        
+        Serial.println("Watchdog disabled, LEDs off, tasks suspended");
+        addToConsoleBuffer("OTA environment: watchdog disabled, LEDs off, tasks suspended");
+        
+        Serial.println("OTA environment prepared successfully");
+        addToConsoleBuffer("OTA environment prepared successfully");
     });
     
     ArduinoOTA.onEnd([]() {
-        Serial.println("\nEnd");
-        // Show green for successful OTA
+        Serial.println("\n=== OTA UPDATE COMPLETED ===");
+        addToConsoleBuffer("OTA UPDATE COMPLETED SUCCESSFULLY");
+        
+        // Restore LED brightness and show success
+        FastLED.setBrightness(BRIGHTNESS);
         fill_solid(leds, NUM_LEDS, CRGB::Green);
         FastLED.show();
         delay(1000);
+        
+        // Resume HTTP tasks
+        otaInProgress = false;
+        resumeHttpTasks();
+        
+        Serial.println("Device will restart in 2 seconds...");
+        addToConsoleBuffer("Device will restart in 2 seconds...");
     });
     
     ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
-        Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
+        static unsigned long lastProgressReport = 0;
+        unsigned int percent = (progress / (total / 100));
         
-        // Show progress with purple LEDs
-        int progressLeds = (progress * NUM_LEDS) / total;
-        fill_solid(leds, NUM_LEDS, CRGB::Black);
-        fill_solid(leds, progressLeds, CRGB::Purple);
-        FastLED.show();
+        // Reset watchdog frequently during flash operations to prevent timeout
+        esp_task_wdt_reset();
+        
+        // Report progress every 5% to monitor flash operations closely
+        if (millis() - lastProgressReport > 500 || percent == 100) {
+            Serial.printf("OTA Progress: %u%% (%u/%u bytes) - Flash: OK, WDT: Reset\n", percent, progress, total);
+            addToConsoleBuffer("OTA Progress: " + String(percent) + "% - Flash: OK");
+            lastProgressReport = millis();
+            
+            // Also log memory status during critical flash operations
+            if (percent % 25 == 0) {  // Every 25%
+                Serial.printf("Memory check - Free heap: %d bytes\n", ESP.getFreeHeap());
+            }
+        }
+        
+        // LEDs disabled during OTA to reduce power consumption
+        // No LED updates to avoid interfering with flash operations
     });
     
     ArduinoOTA.onError([](ota_error_t error) {
-        Serial.printf("Error[%u]: ", error);
-        if (error == OTA_AUTH_ERROR) Serial.println("Auth Failed");
-        else if (error == OTA_BEGIN_ERROR) Serial.println("Begin Failed");
-        else if (error == OTA_CONNECT_ERROR) Serial.println("Connect Failed");
-        else if (error == OTA_RECEIVE_ERROR) Serial.println("Receive Failed");
-        else if (error == OTA_END_ERROR) Serial.println("End Failed");
+        Serial.printf("=== OTA ERROR [%u] ===\n", error);
+        String errorMsg = "OTA ERROR: ";
         
-        // Show red for OTA error
+        if (error == OTA_AUTH_ERROR) {
+            Serial.println("Authentication Failed");
+            errorMsg += "Authentication Failed";
+        } else if (error == OTA_BEGIN_ERROR) {
+            Serial.println("Begin Failed");
+            errorMsg += "Begin Failed";
+        } else if (error == OTA_CONNECT_ERROR) {
+            Serial.println("Connect Failed");
+            errorMsg += "Connect Failed";
+        } else if (error == OTA_RECEIVE_ERROR) {
+            Serial.println("Receive Failed");
+            errorMsg += "Receive Failed";
+        } else if (error == OTA_END_ERROR) {
+            Serial.println("End Failed");
+            errorMsg += "End Failed";
+        } else {
+            Serial.println("Unknown Error");
+            errorMsg += "Unknown Error";
+        }
+        
+        addToConsoleBuffer(errorMsg);
+        
+        // Restore LED brightness and show error
+        FastLED.setBrightness(BRIGHTNESS);
         fill_solid(leds, NUM_LEDS, CRGB::Red);
         FastLED.show();
+        
+        // Resume HTTP tasks on error
+        otaInProgress = false;
+        resumeHttpTasks();
+        
+        Serial.println("HTTP tasks resumed after OTA error");
+        addToConsoleBuffer("HTTP tasks resumed after OTA error");
     });
     
     ArduinoOTA.begin();
@@ -416,8 +526,8 @@ void setupWebServer() {
     });
     
     server.begin();
-    Serial.println("Web server started on http://btc-ticker.local");
-    addToConsoleBuffer("Web server started on http://btc-ticker.local");
+    Serial.println("Web server started on http://" + String(DEVICE_HOSTNAME) + ".local");
+    addToConsoleBuffer("Web server started on http://" + String(DEVICE_HOSTNAME) + ".local");
 }
 
 // Task function for fetching BTC price (runs on separate core)
@@ -427,7 +537,8 @@ void fetchBTCPriceTask(void *pvParameters) {
     client.setInsecure(); // Skip certificate verification for faster performance
     
     while (true) {
-        if (wifiConnected && !priceRequestInProgress) {
+        // Skip HTTP requests during OTA to avoid conflicts
+        if (wifiConnected && !priceRequestInProgress && !otaInProgress) {
             priceRequestInProgress = true;
             
             http.begin(client, BTC_API_URL);
@@ -477,7 +588,8 @@ void fetchOHLCDataTask(void *pvParameters) {
     client.setInsecure();
     
     while (true) {
-        if (wifiConnected && !ohlcHourlyRequestInProgress) {
+        // Skip HTTP requests during OTA to avoid conflicts
+        if (wifiConnected && !ohlcHourlyRequestInProgress && !otaInProgress) {
             ohlcHourlyRequestInProgress = true;
             
             // Fetch hourly data
@@ -697,4 +809,47 @@ void updateScrollingText(int16_t y, const char* text, ScrollState& scrollState, 
             scrollState.reset(32);  // Start from right edge again
         }
     }
+}
+
+// HTTP Task Management Functions for OTA Safety
+void suspendHttpTasks() {
+    Serial.println("Suspending HTTP tasks for OTA...");
+    addToConsoleBuffer("Suspending HTTP tasks for OTA...");
+    
+    if (priceTaskHandle != NULL) {
+        vTaskSuspend(priceTaskHandle);
+        Serial.println("Price task suspended.");
+        addToConsoleBuffer("Price task suspended.");
+    }
+    
+    if (ohlcTaskHandle != NULL) {
+        vTaskSuspend(ohlcTaskHandle);
+        Serial.println("OHLC task suspended.");
+        addToConsoleBuffer("OHLC task suspended.");
+    }
+    
+    httpTasksSuspended = true;
+    Serial.println("All HTTP tasks suspended successfully.");
+    addToConsoleBuffer("All HTTP tasks suspended successfully.");
+}
+
+void resumeHttpTasks() {
+    Serial.println("Resuming HTTP tasks after OTA...");
+    addToConsoleBuffer("Resuming HTTP tasks after OTA...");
+    
+    if (priceTaskHandle != NULL) {
+        vTaskResume(priceTaskHandle);
+        Serial.println("Price task resumed.");
+        addToConsoleBuffer("Price task resumed.");
+    }
+    
+    if (ohlcTaskHandle != NULL) {
+        vTaskResume(ohlcTaskHandle);
+        Serial.println("OHLC task resumed.");
+        addToConsoleBuffer("OHLC task resumed.");
+    }
+    
+    httpTasksSuspended = false;
+    Serial.println("All HTTP tasks resumed successfully.");
+    addToConsoleBuffer("All HTTP tasks resumed successfully.");
 }

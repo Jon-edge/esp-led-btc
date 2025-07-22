@@ -12,6 +12,9 @@
 #define WIFI_SSID "YOUR_WIFI_SSID"
 #define WIFI_PASSWORD "YOUR_WIFI_PASSWORD"
 
+// Note: DEVICE_HOSTNAME is now configured in platformio.ini
+// Edit the "hostname" value in the [platformio] section to customize
+
 // API Configuration
 #define COINGECKO_API_KEY "YOUR_COINGECKO_API_KEY"
 #define UPDATE_INTERVAL 5000   // Update every 5 seconds (12 calls/min, well within Pro API limits)
